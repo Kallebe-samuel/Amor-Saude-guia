@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Amor Saúde - Guias</title>
+  <script>
+    window.APP_CONFIG = {
+      API_BASE_URL: (window.API_BASE_URL || '').replace(/\/$/, '')
+    };
+  </script>
+  <script>
+    // aplicar tema o quanto antes para evitar flash
+    (function(){
+      try{
+        var t = localStorage.getItem('theme');
+        if (!t) { t='dark'; localStorage.setItem('theme','dark'); }
+        if (t==='dark') document.documentElement.classList.add('dark');
+      }catch(e){}
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css">
+  <!-- favicon / ícone da aba (arquivo: public/loguinho.png) -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/loguinho.png">
+  <link rel="shortcut icon" href="/loguinho.png">
+  <link rel="apple-touch-icon" href="/loguinho.png">
+</head>
+<body>
+  <div class="app">
+    <header class="glass" style="display:flex;align-items:center;gap:16px">
+  <a href="/" id="homeLink" aria-label="Página inicial"><img src="logo.png" alt="Amor Saúde" class="logo"></a>
+      <div style="flex:1">
+        <div style="font-weight:700;font-size:18px">AmorSaúde Catalão</div>
+        <div class="muted" style="font-size:12px">Cuidando com carinho</div>
+      </div>
+      <div class="header-actions">
+        <div class="theme-toggle">
+          <button id="toggleTheme" class="theme-switch" aria-label="Alternar tema">
+            <span class="track">
+              <span class="knob" aria-hidden>
+                <!-- ambos os ícones dentro do knob; o CSS controlará qual está visível -->
+                <svg class="icon-svg sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <circle cx="12" cy="12" r="5.6" fill="currentColor" />
+                  <g stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none">
+                    <line x1="12" y1="1.5" x2="12" y2="4" />
+                    <line x1="12" y1="20" x2="12" y2="22.5" />
+                    <line x1="1.5" y1="12" x2="4" y2="12" />
+                    <line x1="20" y1="12" x2="22.5" y2="12" />
+                    <line x1="4.6" y1="4.6" x2="6.8" y2="6.8" />
+                    <line x1="17.2" y1="17.2" x2="19.4" y2="19.4" />
+                    <line x1="17.2" y1="6.8" x2="19.4" y2="4.6" />
+                    <line x1="4.6" y1="19.4" x2="6.8" y2="17.2" />
+                  </g>
+                </svg>
+                <svg class="icon-svg moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" fill="currentColor" />
+                  <g fill="currentColor">
+                    <polygon points="17.5,5.5 16.8,6.6 15.6,6.9 16.7,7.8 16.4,9 17.5,8.3 18.6,9 18.3,7.8 19.4,6.9 18.2,6.6" />
+                    <polygon points="14.2,15.2 13.7,16 12.9,16.2 13.6,16.8 13.4,17.6 14.2,17.1 15,17.6 14.8,16.8 15.5,16.2 14.7,16" />
+                  </g>
+                </svg>
+              </span>
+            </span>
+          </button>
+        </div>
+        <button id="logout" class="btn btn-logout hidden">Sair</button>
+      </div>
+    </header>
+
+    <main>
+    <section id="loginSection" class="card glass">
+        <h2>Login</h2>
+        <form id="loginForm">
+          <input type="email" id="email" placeholder="Email" required>
+          <div class="password-wrap">
+            <input type="password" id="password" placeholder="Senha" required>
+            <button type="button" id="togglePassword" class="password-toggle" aria-label="Mostrar senha" aria-pressed="false">👁</button>
+          </div>
+      <button type="submit" class="btn btn-primary btn-large">Entrar</button>
+        </form>
+      </section>
+
+      <section id="appSection" class="hidden">
+        <nav class="glass-soft" style="display:flex;gap:12px;align-items:center">
+          <button id="btnNewGuia" class="btn btn-ghost btn-large nav-tab">Gerar Guia</button>
+          <button id="btnHistory" class="btn btn-ghost nav-tab">Histórico</button>
+          <button id="btnUsers" class="adminOnly btn btn-ghost nav-tab">Usuários</button>
+          <button id="btnExecutantes" class="adminOnly btn btn-ghost nav-tab">Executantes</button>
+          <button id="btnProcedimentos" class="adminOnly btn btn-ghost nav-tab">Procedimentos</button>
+        </nav>
+
+        <div id="content"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

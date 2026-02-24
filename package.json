@@ -1,0 +1,36 @@
+{
+  "name": "amor-saude-guias",
+  "version": "1.0.0",
+  "description": "Sistema de Guias de Encaminhamento - Clínica Amor Saúde (Catalão/GO)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "seed": "node seed/seed.js",
+    "seed:access": "node seed/ensure_access_users.js",
+    "seed:procedures": "node seed/seed_procedures.js",
+    "start:selfheal": "powershell -ExecutionPolicy Bypass -File ./scripts/start-server.ps1",
+    "mongo:repair-service": "powershell -ExecutionPolicy Bypass -File ./scripts/repair-mongo-service.ps1",
+    "full:fix": "cmd /c .\\scripts\\run-full-fix.bat",
+    "full:fix:ps": "powershell -ExecutionPolicy Bypass -File ./scripts/run-full-fix.ps1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "bcrypt": "^5.1.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "helmet": "^6.0.1",
+    "hpp": "^0.2.3",
+    "jsonwebtoken": "^9.0.0",
+    "mongoose": "^7.0.4",
+    "socket.io": "^4.8.1",
+    "validator": "^13.9.0",
+    "xss-clean": "^0.1.1"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  }
+}
