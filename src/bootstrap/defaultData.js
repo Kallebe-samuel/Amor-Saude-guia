@@ -22,6 +22,18 @@ function loadProceduresCatalog() {
 
 const defaultUsers = [
   {
+    name: 'Gestor Amor Saúde',
+    email: 'catalao.go@amorsaude.com',
+    password: 'Amor@100',
+    role: 'gestor'
+  },
+  {
+    name: 'Recepção Amor Saúde',
+    email: 'recepcao@amorsaude.com',
+    password: 'Amor@100',
+    role: 'recepcao'
+  },
+  {
     name: 'Vanessa Moreira',
     email: 'vanessamoreira20234@gmail.com',
     password: 'Vanessa2025@',

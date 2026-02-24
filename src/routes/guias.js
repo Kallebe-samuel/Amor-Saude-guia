@@ -11,11 +11,22 @@ function emitChange(req, action, payload){
   io.emit('guias:changed', { action, payload, at: Date.now() });
 }
 
+function normalizeProcedimentos(data){
+  const rawList = Array.isArray(data.procedimentos) ? data.procedimentos : [];
+  const fallback = typeof data.procedimento === 'string' ? [data.procedimento] : [];
+  return rawList
+    .concat(fallback)
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .filter((item, index, arr) => arr.indexOf(item) === index);
+}
+
 // Criar guia (gestor e recepção)
 router.post('/', protect, async (req, res) => {
   const data = req.body;
+  const procedimentos = normalizeProcedimentos(data);
   // validações básicas
-  if (!data.pacienteNome || !data.cpf || !data.idPagamento || !data.valor || !data.procedimento || !data.executante) {
+  if (!data.pacienteNome || !data.cpf || !data.idPagamento || !data.valor || !data.executante || !procedimentos.length) {
     return res.status(400).json({ message: 'Campos obrigatórios ausentes' });
   }
   // CPF simples – usar validator
@@ -28,6 +39,7 @@ router.post('/', protect, async (req, res) => {
   try {
     const exec = await Executante.findById(data.executante);
     if (!exec) return res.status(400).json({ message: 'Executante inválido' });
+    const procedimentoPrincipal = procedimentos[0];
     const guia = await Guia.create({
       pacienteNome: data.pacienteNome,
       cpf: data.cpf,
@@ -37,7 +49,8 @@ router.post('/', protect, async (req, res) => {
       valor: data.valor,
       dataPagamento: data.dataPagamento,
   solicitante: data.solicitante || null,
-  procedimento: data.procedimento,
+      procedimento: procedimentoPrincipal,
+      procedimentos,
   observacoes: data.observacoes || null,
       executante: exec._id,
       parceria: 'CARTAO DE TODOS',

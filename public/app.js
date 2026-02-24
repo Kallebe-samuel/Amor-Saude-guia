@@ -373,19 +373,29 @@ async function renderStandardGuidePDF(doc, form, exec){
   doc.setTextColor(120);
   doc.text(formatDateTime(new Date()), col2x + doc.getTextWidth('Emitido em: ')+2, 101);
 
+  const procedimentosList = normalizeProcedimentos(form.procedimentos || form.procedimento);
+
   // Seção Procedimentos
   doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.setTextColor(20);
   doc.text('Procedimentos', left, 124);
   doc.setDrawColor(200,200,200); doc.setLineWidth(0.5);
   doc.line(left, 126, right, 126);
   doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(80);
-  // bloco de procedimento com borda leve
-  doc.setDrawColor(220,220,220);
-  doc.rect(left, 132, right-left, 26);
-  doc.text(form.procedimento, left+4, 142);
+  let proceduresY = 134;
+  const renderedProcedures = procedimentosList.length ? procedimentosList : ['-'];
+  for (const item of renderedProcedures) {
+    const wrapped = doc.splitTextToSize(item, right - left - 10);
+    if (!wrapped.length) continue;
+    doc.text(`• ${wrapped[0]}`, left + 2, proceduresY);
+    for (let i = 1; i < wrapped.length; i++) {
+      proceduresY += 5;
+      doc.text(wrapped[i], left + 8, proceduresY);
+    }
+    proceduresY += 8;
+  }
 
   // Executante bloco (nome, endereço, contato)
-  const execTop = 164;
+  const execTop = Math.max(164, proceduresY + 4);
   doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.setTextColor(20);
   doc.text((exec.name||'EXECUTANTE').toUpperCase(), left, execTop);
   doc.setFont('helvetica','normal'); doc.setFontSize(9);
@@ -412,17 +422,18 @@ async function renderStandardGuidePDF(doc, form, exec){
   doc.setFont('helvetica','bold'); doc.setTextColor(120); doc.text(formatMoneyBR(form.valor), payX, execTop+30);
 
   // Rodapé com observações (texto solicitado)
+  const observacoesTop = Math.max(196, execTop + 38);
   doc.setFontSize(8); doc.setTextColor(120);
   if (form.observacoes) {
   doc.setFontSize(9); doc.setTextColor(42,167,183);
-  doc.text('Observações:', left, 196);
+  doc.text('Observações:', left, observacoesTop);
     // suportar múltiplas linhas
     const lines = doc.splitTextToSize(form.observacoes, right-left-4);
     doc.setFontSize(8); doc.setTextColor(120);
-    doc.text(lines, left, 200);
-  doc.text('Documento gerado eletronicamente pelo AmorSaúde Catalão', left, 200 + lines.length*4 + 6);
+    doc.text(lines, left, observacoesTop + 4);
+  doc.text('Documento gerado eletronicamente pelo AmorSaúde Catalão', left, observacoesTop + 4 + lines.length*4 + 6);
   } else {
-  doc.text('Documento gerado eletronicamente pelo AmorSaúde Catalão', left, 202);
+  doc.text('Documento gerado eletronicamente pelo AmorSaúde Catalão', left, observacoesTop + 6);
   }
 
 }
@@ -445,6 +456,64 @@ function validateCPF(cpf){
 function calcAge(dob){ const diff = Date.now() - new Date(dob).getTime(); return Math.floor(diff / (1000*60*60*24*365.25)); }
 
 function formatMoneyBR(v){ return v.toLocaleString('pt-BR', { style:'currency', currency:'BRL' }); }
+
+function normalizeProcedimentos(value){
+  const list = Array.isArray(value) ? value : [value];
+  return list
+    .map((item)=> String(item || '').trim())
+    .filter(Boolean)
+    .filter((item, index, arr)=> arr.indexOf(item) === index);
+}
+
+function normalizeSearchText(value){
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function scoreProcedureMatch(name, query){
+  const normalizedName = normalizeSearchText(name);
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedName || !normalizedQuery) return -1;
+
+  if (normalizedName === normalizedQuery) return 1000;
+  if (normalizedName.startsWith(normalizedQuery)) return 900 - (normalizedName.length - normalizedQuery.length);
+
+  const includeIndex = normalizedName.indexOf(normalizedQuery);
+  if (includeIndex >= 0) return 750 - includeIndex;
+
+  const queryTokens = normalizedQuery.split(' ').filter(Boolean);
+  if (queryTokens.length) {
+    let matchedTokens = 0;
+    let positionPenalty = 0;
+    queryTokens.forEach((token)=>{
+      const tokenIndex = normalizedName.indexOf(token);
+      if (tokenIndex >= 0) {
+        matchedTokens++;
+        positionPenalty += tokenIndex;
+      }
+    });
+    if (matchedTokens === queryTokens.length) return 620 - positionPenalty;
+    if (matchedTokens > 0) return 420 + (matchedTokens * 20) - positionPenalty;
+  }
+
+  let queryIndex = 0;
+  for (const char of normalizedName) {
+    if (char === normalizedQuery[queryIndex]) queryIndex++;
+    if (queryIndex >= normalizedQuery.length) return 300;
+  }
+
+  return -1;
+}
+
+function getGuiaProcedimentosText(guia){
+  const list = normalizeProcedimentos((guia && guia.procedimentos && guia.procedimentos.length) ? guia.procedimentos : guia && guia.procedimento);
+  return list.join(' • ');
+}
 
 function pad(n){ return n<10? '0'+n : ''+n; }
 
@@ -626,7 +695,6 @@ async function showNewGuiaForm(){
   // carregar procedimentos pre-cadastrados
   const procsRes = await fetch('/api/procedimentos', { headers:{ Authorization: 'Bearer '+token } });
   const procedimentos = procsRes.ok? await procsRes.json() : [];
-  const procOptions = procedimentos.map(p=>`<option value="${escapeHtml(p.name)}" data-id="${p._id}">${escapeHtml(p.name)}</option>`).join('');
   $('#content').innerHTML = `
     <div class="card glass">
       <h3>Nova Guia</h3>
@@ -638,12 +706,20 @@ async function showNewGuiaForm(){
         <input id="valor" placeholder="Valor (ex: 123.45)" required>
   <input type="date" id="dataPagamento" value="${new Date().toISOString().slice(0,10)}">
         <div style="display:flex;gap:8px;flex-direction:column">
-          <label class="label">Procedimento (selecione ou digite livre)</label>
-          <div style="position:relative">
+          <label class="label">Procedimentos (selecione ou digite livre)</label>
+          <div class="proc-input-row" style="position:relative">
             <input id="procedimento_search" placeholder="Pesquisar procedimento..." autocomplete="off">
+            <button type="button" id="btn_add_proc_search" class="btn btn-ghost proc-add-btn" title="Adicionar procedimento">+</button>
             <div id="proc_dropdown" class="proc-dropdown"></div>
           </div>
-          <input id="procedimento_free" placeholder="Ou digite o procedimento livre aqui (opcional)">
+          <div class="proc-input-row">
+            <input id="procedimento_free" placeholder="Ou digite o procedimento livre aqui (opcional)">
+            <button type="button" id="btn_add_proc_free" class="btn btn-ghost proc-add-btn" title="Adicionar procedimento">+</button>
+          </div>
+          <div>
+            <div class="label">Procedimentos adicionados</div>
+            <ul id="procedimentos_list" class="proc-added-list"><li class="muted">Nenhum procedimento adicionado</li></ul>
+          </div>
         </div>
         <div style="margin-top:8px"><div class="label">Observações (opcional)</div><textarea id="observacoes" placeholder="Observações para o fornecedor ou interno"></textarea></div>
         <select id="executante">${options}</select>
@@ -654,8 +730,109 @@ async function showNewGuiaForm(){
   `;
 
   $('#cpf').addEventListener('blur', ()=>{ if (!validateCPF($('#cpf').value)) showModalMessage('CPF inválido'); });
+  const procDropdown = document.getElementById('proc_dropdown');
+  let currentProcs = procedimentos || [];
+  const procedimentosCatalog = Array.isArray(procedimentos) ? procedimentos.slice() : [];
+  let selectedProcedure = null;
+  let selectedProcedimentos = [];
+
+  function renderSelectedProcedimentos(){
+    const listEl = document.getElementById('procedimentos_list');
+    if (!listEl) return;
+    if (!selectedProcedimentos.length) {
+      listEl.innerHTML = '<li class="muted">Nenhum procedimento adicionado</li>';
+      return;
+    }
+    listEl.innerHTML = selectedProcedimentos.map((item)=>`<li>${escapeHtml(item)}</li>`).join('');
+  }
+
+  function addProcedimentoValue(value){
+    const clean = String(value || '').trim();
+    if (!clean) return;
+    if (selectedProcedimentos.includes(clean)) return;
+    selectedProcedimentos.push(clean);
+    renderSelectedProcedimentos();
+  }
+
+  function addFromSearch(){
+    const value = selectedProcedure || $('#procedimento_search').value.trim();
+    addProcedimentoValue(value);
+    $('#procedimento_search').value = '';
+    selectedProcedure = null;
+    procDropdown.style.display = 'none';
+  }
+
+  function addFromFree(){
+    const value = $('#procedimento_free').value.trim();
+    addProcedimentoValue(value);
+    $('#procedimento_free').value = '';
+  }
+
+  document.getElementById('btn_add_proc_search').addEventListener('click', addFromSearch);
+  document.getElementById('btn_add_proc_free').addEventListener('click', addFromFree);
+
+  $('#procedimento_search').addEventListener('keydown', (ev)=>{
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      addFromSearch();
+    }
+  });
+
+  $('#procedimento_free').addEventListener('keydown', (ev)=>{
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      addFromFree();
+    }
+  });
+
+  function renderProcDropdown(list){
+    if (!list || !list.length) { procDropdown.style.display='none'; procDropdown.innerHTML=''; return; }
+    procDropdown.innerHTML = list.map(p=>`<div class="proc-item" data-id="${p._id}">${escapeHtml(p.name)}</div>`).join('');
+    procDropdown.style.display='block';
+    procDropdown.querySelectorAll('.proc-item').forEach(it=>{
+      it.addEventListener('click', ()=>{
+        const id = it.getAttribute('data-id');
+        const proc = currentProcs.find(x=>x._id===id);
+        if (proc){
+          document.getElementById('procedimento_search').value = proc.name;
+          selectedProcedure = proc.name;
+        }
+        procDropdown.style.display='none';
+      });
+    });
+  }
+
+  $('#procedimento_search').addEventListener('input', ()=>{
+    const q = $('#procedimento_search').value.trim();
+    selectedProcedure = null;
+    if (!q){ procDropdown.style.display='none'; return; }
+
+    const rankedList = procedimentosCatalog
+      .map((proc)=> ({ proc, score: scoreProcedureMatch(proc && proc.name, q) }))
+      .filter((item)=> item.score >= 0)
+      .sort((a, b)=> {
+        if (b.score !== a.score) return b.score - a.score;
+        return String(a.proc && a.proc.name || '').localeCompare(String(b.proc && b.proc.name || ''), 'pt-BR');
+      })
+      .slice(0, 20)
+      .map((item)=> item.proc);
+
+    currentProcs = rankedList;
+    renderProcDropdown(rankedList);
+  });
+
+  document.addEventListener('click', (ev)=>{
+    if (!ev.target.closest || (!ev.target.closest('#procedimento_search') && !ev.target.closest('#proc_dropdown'))) procDropdown.style.display='none';
+  });
+
   document.getElementById('guiaForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
+    const procedimentosFinal = normalizeProcedimentos(
+      selectedProcedimentos.concat([
+        selectedProcedure || $('#procedimento_search').value.trim(),
+        $('#procedimento_free').value.trim()
+      ])
+    );
   const form = {
       pacienteNome: $('#pacienteNome').value.trim(),
       cpf: $('#cpf').value.replace(/\D/g,''),
@@ -663,7 +840,8 @@ async function showNewGuiaForm(){
   // aceitar formatos com pontos de milhar e vírgula decimal (ex: 1.234,56)
   valor: (function(v){ try{ if (!v) return 0; const cleaned = v.replace(/\./g,'').replace(/,/g,'.'); const n = parseFloat(cleaned); return isNaN(n)?0:n; }catch(e){return 0;} })($('#valor').value.trim()),
   dataPagamento: $('#dataPagamento').value,
-  procedimento: ($('#procedimento_free').value.trim() || selectedProcedure || $('#procedimento_search').value.trim()),
+  procedimento: procedimentosFinal[0] || '',
+  procedimentos: procedimentosFinal,
   observacoes: $('#observacoes').value.trim(),
   executante: $('#executante').value
     };
@@ -671,7 +849,7 @@ async function showNewGuiaForm(){
   form.atendenteNome = user ? user.name : '';
   form.atendentePerfil = user ? user.role : '';
     // validações
-  if (!form.pacienteNome || !form.cpf || !form.idPagamento || !form.valor || !form.procedimento) return showModalMessage('Preencha todos os campos obrigatórios');
+  if (!form.pacienteNome || !form.cpf || !form.idPagamento || !form.valor || !form.procedimentos.length) return showModalMessage('Preencha todos os campos obrigatórios');
   if (!validateCPF(form.cpf)) return showModalMessage('CPF inválido');
   if (new Date(form.dataPagamento) > new Date()) return showModalMessage('Data de pagamento não pode ser futura');
 
@@ -710,49 +888,6 @@ async function showNewGuiaForm(){
       try{ if (typeof showHistory === 'function') showHistory(); }catch(e){}
     }catch(err){ showModalMessage('Erro ao salvar guia: '+(err.message||err)); }
   });
-
-  // pesquisa simples no select de procedimentos
-  // Autocomplete dropdown
-  const procDropdown = document.getElementById('proc_dropdown');
-  let currentProcs = procedimentos || [];
-  let selectedProcedure = null; // string
-
-  function renderProcDropdown(list){
-    if (!list || !list.length) { procDropdown.style.display='none'; procDropdown.innerHTML=''; return; }
-    procDropdown.innerHTML = list.map(p=>`<div class="proc-item" data-id="${p._id}">${escapeHtml(p.name)}</div>`).join('');
-    procDropdown.style.display='block';
-    // attach click
-    procDropdown.querySelectorAll('.proc-item').forEach(it=>{
-      it.addEventListener('click', ()=>{
-        const id = it.getAttribute('data-id');
-        const proc = currentProcs.find(x=>x._id===id);
-        if (proc){
-          document.getElementById('procedimento_search').value = proc.name;
-          selectedProcedure = proc.name;
-        }
-        procDropdown.style.display='none';
-      });
-    });
-  }
-
-  $('#procedimento_search').addEventListener('input', async ()=>{
-    const q = $('#procedimento_search').value.trim();
-    selectedProcedure = null;
-    if (!q){ procDropdown.style.display='none'; return; }
-    // buscar no servidor com debounce simples
-    try{
-      const r = await fetch('/api/procedimentos?q='+encodeURIComponent(q), { headers:{ Authorization: 'Bearer '+token } });
-      if (!r.ok) return renderProcDropdown([]);
-      const list = await r.json(); currentProcs = list; renderProcDropdown(list);
-    }catch(e){ renderProcDropdown([]); }
-  });
-
-  // fechar dropdown quando clicar fora
-  document.addEventListener('click', (ev)=>{ if (!ev.target.closest || !ev.target.closest('#procedimento_search') && !ev.target.closest('#proc_dropdown')) procDropdown.style.display='none'; });
-
-  // coletar observacoes ao submeter
-  const oldSubmit = document.getElementById('guiaForm');
-  // override: já há handler acima; ensure observacoes included in form object by reading value when submitting
 }
 
 async function showHistory(){
@@ -795,7 +930,7 @@ async function showHistory(){
         <div class="glass" style="padding:12px;margin:8px 0;display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1">
             <div style="font-weight:700">${escapeHtml(g.pacienteNome)}</div>
-            <div class="muted" style="font-size:13px">CPF: ${cpfFmt} • ID: ${escapeHtml(g.idPagamento)} • ${escapeHtml(g.procedimento)}</div>
+            <div class="muted" style="font-size:13px">CPF: ${cpfFmt} • ID: ${escapeHtml(g.idPagamento)} • ${escapeHtml(getGuiaProcedimentosText(g))}</div>
             <div class="muted" style="font-size:13px;margin-top:6px">Fornecedor: ${escapeHtml(execName)}</div>
           </div>
           <div style="text-align:right;margin-left:12px">

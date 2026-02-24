@@ -44,6 +44,9 @@ body {
 		radial-gradient(1200px 600px at -10% -10%, rgba(46,196,182,.18), transparent 45%),
 		radial-gradient(900px 600px at 110% 0%, rgba(82,113,255,.15), transparent 45%),
 		linear-gradient(160deg, var(--bg-grad-1), var(--bg-grad-2));
+	background-repeat: no-repeat;
+	background-attachment: fixed;
+	background-size: 100% 100%, 100% 100%, 100% 100%;
 }
 
 .app {
@@ -525,6 +528,51 @@ html.dark .icon-svg.moon { opacity: 1; transform: scale(1); }
 
 .proc-item:hover {
 	background: color-mix(in oklab, var(--ghost) 80%, transparent);
+}
+
+.proc-input-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.proc-add-btn {
+	width: 36px;
+	height: 36px;
+	min-width: 36px;
+	padding: 0;
+	font-size: 20px;
+	line-height: 1;
+	border-radius: 10px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.proc-add-btn:hover,
+.proc-add-btn:focus-visible,
+.proc-add-btn:active {
+	color: #fff;
+	background: linear-gradient(90deg, var(--primary), var(--primary-2));
+	border-color: transparent;
+	box-shadow: 0 8px 20px rgba(43,182,199,.28);
+}
+
+.proc-added-list {
+	margin: 0;
+	padding-left: 18px;
+	border: 1px solid var(--input-border);
+	border-radius: 12px;
+	background: var(--input-bg);
+	min-height: 44px;
+	padding-top: 8px;
+	padding-bottom: 8px;
+}
+
+.proc-added-list li {
+	margin: 0 10px 4px 0;
+	color: var(--text);
+	font-size: 14px;
 }
 
 /* paginação */

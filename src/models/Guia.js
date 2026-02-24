@@ -10,6 +10,7 @@ const GuiaSchema = new mongoose.Schema({
   dataPagamento: { type: Date, required: true },
   solicitante: { type: String },
   procedimento: { type: String, required: true },
+  procedimentos: { type: [String], default: [] },
   observacoes: { type: String },
   executante: { type: mongoose.Schema.Types.ObjectId, ref: 'Executante', required: true },
   parceria: { type: String, default: 'CARTAO DE TODOS' },
