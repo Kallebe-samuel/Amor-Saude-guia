@@ -255,7 +255,10 @@ function openProcModal(proc){
 }
 
 // Renderiza o layout padrão da guia no objeto jsPDF
-async function renderStandardGuidePDF(doc, form, exec){
+async function renderStandardGuidePDF(doc, form, exec, options = {}){
+  const isSecondCopy = !!options.isSecondCopy;
+  const originalIssuedAt = options.originalIssuedAt || form.emitidoEm || new Date();
+  const currentIssueAt = options.reissuedAt || new Date();
   // Layout A4 (mm) — margens: 12mm
   const left = 12;
   const right = 198; // A4 width 210 - 12 margin
@@ -316,7 +319,8 @@ async function renderStandardGuidePDF(doc, form, exec){
   doc.setFont('helvetica','normal');
   doc.setFontSize(9);
   doc.setTextColor(120);
-  doc.text(formatDateTime(new Date()), right-2, 66, {align: 'right'});
+  const headingDate = isSecondCopy ? currentIssueAt : originalIssuedAt;
+  doc.text(formatDateTime(headingDate), right-2, 66, {align: 'right'});
 
   // divider (usar cor do accent)
   doc.setDrawColor(42,167,183);
@@ -371,7 +375,7 @@ async function renderStandardGuidePDF(doc, form, exec){
   doc.setTextColor(42,167,183);
   doc.text('Emitido em:', col2x, 101);
   doc.setTextColor(120);
-  doc.text(formatDateTime(new Date()), col2x + doc.getTextWidth('Emitido em: ')+2, 101);
+  doc.text(formatDateTime(originalIssuedAt), col2x + doc.getTextWidth('Emitido em: ')+2, 101);
 
   const procedimentosList = normalizeProcedimentos(form.procedimentos || form.procedimento);
 
@@ -436,6 +440,14 @@ async function renderStandardGuidePDF(doc, form, exec){
   doc.text('Documento gerado eletronicamente pelo AmorSaúde Catalão', left, observacoesTop + 6);
   }
 
+  if (isSecondCopy) {
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(16);
+    doc.setTextColor(150);
+    doc.text(`2ª VIA • Reemitida em ${formatDateTime(currentIssueAt)}`, (left + right) / 2, 276, { align: 'center' });
+    doc.setFont('helvetica','normal');
+  }
+
 }
 
 function logout(){ localStorage.removeItem('token'); localStorage.removeItem('user'); token=null; user=null; location.reload(); }
@@ -456,6 +468,18 @@ function validateCPF(cpf){
 function calcAge(dob){ const diff = Date.now() - new Date(dob).getTime(); return Math.floor(diff / (1000*60*60*24*365.25)); }
 
 function formatMoneyBR(v){ return v.toLocaleString('pt-BR', { style:'currency', currency:'BRL' }); }
+
+function parseMoneyInput(value){
+  try {
+    if (value === null || value === undefined) return 0;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    const cleaned = String(value).trim().replace(/\./g,'').replace(',', '.');
+    const parsed = parseFloat(cleaned);
+    return Number.isFinite(parsed) ? parsed : 0;
+  } catch (e) {
+    return 0;
+  }
+}
 
 function normalizeProcedimentos(value){
   const list = Array.isArray(value) ? value : [value];
@@ -688,6 +712,332 @@ async function ensureJsPDF(){
   throw new Error('Não foi possível carregar a biblioteca de PDF (jsPDF)');
 }
 
+function getExecutanteRefId(executanteRef){
+  if (!executanteRef) return '';
+  if (typeof executanteRef === 'string') return executanteRef;
+  return String(executanteRef._id || executanteRef.id || '');
+}
+
+function getExecutanteName(executanteRef, executantesCatalog = []){
+  if (!executanteRef) return '';
+  if (typeof executanteRef === 'object' && executanteRef.name) return executanteRef.name;
+  const execId = getExecutanteRefId(executanteRef);
+  if (!execId) return '';
+  const found = (executantesCatalog || []).find((item)=> String(item._id) === execId || String(item.id) === execId);
+  return found && found.name ? found.name : '';
+}
+
+function normalizeGuiaDistribuicao(guiaData){
+  const distribuicao = Array.isArray(guiaData && guiaData.distribuicaoExecutantes) ? guiaData.distribuicaoExecutantes : [];
+  const normalized = distribuicao
+    .map((item)=>({
+      executante: (item && item.executante) || null,
+      procedimentosRaw: Array.isArray(item && item.procedimentos) ? item.procedimentos : [],
+      itens: (Array.isArray(item && item.itens) ? item.itens : [])
+        .map((entry)=>({
+          procedimento: String((entry && entry.procedimento) || '').trim(),
+          valor: parseMoneyInput(entry && entry.valor)
+        }))
+        .filter((entry)=> entry.procedimento)
+    }))
+    .map((item)=>({
+      ...item,
+      procedimentos: normalizeProcedimentos(
+        (Array.isArray(item.procedimentosRaw) ? item.procedimentosRaw : [])
+          .concat(item.itens.map((entry)=> entry.procedimento))
+      )
+    }))
+    .filter((item)=> getExecutanteRefId(item.executante) && item.procedimentos.length);
+
+  if (normalized.length) return normalized;
+
+  const execFallback = guiaData && (guiaData.executante || (Array.isArray(guiaData.executantes) ? guiaData.executantes[0] : null));
+  const procedimentosFallback = normalizeProcedimentos((guiaData && guiaData.procedimentos) || (guiaData && guiaData.procedimento));
+  if (!execFallback || !procedimentosFallback.length) return [];
+  return [{ executante: execFallback, procedimentos: procedimentosFallback, itens: [] }];
+}
+
+async function fetchGuiaById(guiaId){
+  const id = String(guiaId || '').trim();
+  if (!id) throw new Error('ID da guia inválido');
+  const res = await fetch(`/api/guias/${id}`, { headers: { Authorization: 'Bearer ' + token } });
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  let data = null;
+  if (contentType.includes('application/json')) {
+    data = await res.json();
+  } else {
+    const raw = await res.text();
+    throw new Error(`Resposta inválida ao buscar guia (${res.status}): ${raw.slice(0, 80)}`);
+  }
+  if (!res.ok) throw new Error(data && data.message ? data.message : 'Erro ao buscar guia');
+  return data;
+}
+
+async function saveGuiaDistribution(guiaId, payload){
+  const id = String(guiaId || '').trim();
+  if (!id) throw new Error('ID da guia inválido');
+  const res = await fetch(`/api/guias/${id}/distribuicao`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+    body: JSON.stringify(payload || {})
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data && data.message ? data.message : 'Erro ao salvar distribuição da guia');
+  return data;
+}
+
+async function resolveExecutanteEntity(executanteRef, executantesCatalog){
+  if (executanteRef && typeof executanteRef === 'object' && executanteRef.name) return executanteRef;
+  const execId = getExecutanteRefId(executanteRef);
+  if (!execId) return {};
+
+  const catalog = Array.isArray(executantesCatalog) && executantesCatalog.length ? executantesCatalog : await fetchExecutantes();
+  return catalog.find((item)=> String(item._id) === execId || String(item.id) === execId) || {};
+}
+
+function buildPdfFileSuffix(raw){
+  const clean = String(raw || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+  return clean ? `-${clean}` : '';
+}
+
+async function generateGuidePdf(guiaData, options = {}){
+  const jsPDFClass = await ensureJsPDF();
+  const doc = new jsPDFClass('p','mm','a4');
+  doc.setFont('helvetica');
+  doc.setFontSize(12);
+
+  const exec = await resolveExecutanteEntity(options.execRef || (guiaData && guiaData.executante), options.executantesCatalog);
+  const procedimentosPdf = normalizeProcedimentos(options.proceduresOverride && options.proceduresOverride.length ? options.proceduresOverride : (guiaData && guiaData.procedimentos));
+  const guiaPdf = {
+    ...(guiaData || {}),
+    executante: exec && exec._id ? exec._id : (options.execRef || (guiaData && guiaData.executante)),
+    procedimento: procedimentosPdf[0] || ((guiaData && guiaData.procedimento) || ''),
+    procedimentos: procedimentosPdf,
+    valor: Number(options.valueOverride || 0) > 0 ? Number(options.valueOverride) : Number((guiaData && guiaData.valor) || 0)
+  };
+  await renderStandardGuidePDF(doc, guiaPdf, exec || {}, options);
+
+  const pdfBlob = doc.output('blob');
+  const url = URL.createObjectURL(pdfBlob);
+  const popup = window.open(url, '_blank');
+  if (!popup) {
+    const baseId = (guiaData && guiaData.idPagamento) || Date.now();
+    const suffix = buildPdfFileSuffix(options.fileSuffix || (exec && exec.name));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${options.isSecondCopy ? 'guia-2via' : 'guia'}-${baseId}${suffix}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  setTimeout(()=> URL.revokeObjectURL(url), 60_000);
+}
+
+async function generateGuideMultiPagePdf(guiaData, pageConfigs, options = {}){
+  const pages = Array.isArray(pageConfigs) ? pageConfigs.filter((item)=> item && item.execRef) : [];
+  if (!pages.length) throw new Error('Nenhuma página para gerar PDF');
+
+  const jsPDFClass = await ensureJsPDF();
+  const doc = new jsPDFClass('p','mm','a4');
+  doc.setFont('helvetica');
+  doc.setFontSize(12);
+
+  const executantesCatalog = Array.isArray(options.executantesCatalog) && options.executantesCatalog.length
+    ? options.executantesCatalog
+    : await fetchExecutantes();
+
+  for (let index = 0; index < pages.length; index++) {
+    const page = pages[index];
+    const exec = await resolveExecutanteEntity(page.execRef, executantesCatalog);
+    const procedimentosPdf = normalizeProcedimentos(page.proceduresOverride && page.proceduresOverride.length ? page.proceduresOverride : (guiaData && guiaData.procedimentos));
+    const guiaPdf = {
+      ...(guiaData || {}),
+      executante: exec && exec._id ? exec._id : page.execRef,
+      procedimento: procedimentosPdf[0] || ((guiaData && guiaData.procedimento) || ''),
+      procedimentos: procedimentosPdf,
+      valor: Number(page.valueOverride || 0) > 0 ? Number(page.valueOverride) : Number((guiaData && guiaData.valor) || 0)
+    };
+
+    if (index > 0) doc.addPage('a4', 'p');
+    await renderStandardGuidePDF(doc, guiaPdf, exec || {}, options);
+  }
+
+  const pdfBlob = doc.output('blob');
+  const url = URL.createObjectURL(pdfBlob);
+  const popup = window.open(url, '_blank');
+  if (!popup) {
+    const baseId = (guiaData && guiaData.idPagamento) || Date.now();
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${options.isSecondCopy ? 'guia-2via' : 'guia'}-${baseId}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  setTimeout(()=> URL.revokeObjectURL(url), 60_000);
+}
+
+async function generateGuidePdfsFromDistribution(guiaData, options = {}){
+  const distribuicao = normalizeGuiaDistribuicao(guiaData || {});
+  if (!distribuicao.length) throw new Error('Distribuição de executantes não encontrada');
+
+  const executantesCatalog = Array.isArray(options.executantesCatalog) && options.executantesCatalog.length
+    ? options.executantesCatalog
+    : await fetchExecutantes();
+
+  const pageConfigs = distribuicao.map((item)=>{
+    const valorExec = (item.itens || []).reduce((sum, entry)=> sum + parseMoneyInput(entry && entry.valor), 0);
+    return {
+      execRef: item.executante,
+      proceduresOverride: item.procedimentos,
+      valueOverride: valorExec > 0 ? valorExec : null
+    };
+  });
+
+  await generateGuideMultiPagePdf(guiaData, pageConfigs, {
+    ...options,
+    executantesCatalog
+  });
+
+  return distribuicao.length;
+}
+
+function showProcedureDistributionModal(procedimentos, executanteIds, executantesCatalog, options = {}){
+  return new Promise((resolve)=>{
+    const old = document.getElementById('distribuicaoOverlay');
+    if (old) old.remove();
+
+    const executantes = (executanteIds || []).map((id)=>{
+      const found = (executantesCatalog || []).find((item)=> String(item._id) === String(id));
+      return { id: String(id), name: found && found.name ? found.name : `Executante ${id}` };
+    }).filter((item)=> item.id);
+
+    const procedimentosNorm = normalizeProcedimentos(procedimentos);
+    if (!executantes.length || !procedimentosNorm.length) return resolve(null);
+
+    const initialDistribuicao = Array.isArray(options.initialDistribution) ? options.initialDistribution : [];
+    const title = options.title || 'Distribuir exames por executante';
+    const description = options.description || 'Selecione para qual executante cada exame será enviado e informe o valor de cada exame.';
+    const minDistinctExecutantes = Number(options.minDistinctExecutantes || 1);
+
+    const initialMap = {};
+    initialDistribuicao.forEach((distItem)=>{
+      const execId = getExecutanteRefId(distItem && distItem.executante);
+      const itens = Array.isArray(distItem && distItem.itens) ? distItem.itens : [];
+      const procedimentosItem = normalizeProcedimentos(distItem && distItem.procedimentos);
+
+      procedimentosItem.forEach((proc)=>{
+        if (!initialMap[proc]) initialMap[proc] = { execId, valor: 0 };
+      });
+
+      itens.forEach((entry)=>{
+        const proc = String((entry && entry.procedimento) || '').trim();
+        if (!proc) return;
+        initialMap[proc] = {
+          execId: execId || (initialMap[proc] && initialMap[proc].execId) || '',
+          valor: parseMoneyInput(entry && entry.valor)
+        };
+      });
+    });
+
+    const overlay = document.createElement('div');
+    overlay.id = 'distribuicaoOverlay';
+    overlay.className = 'modal-overlay modal-overlay-strong';
+    overlay.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-header">
+          <strong>${escapeHtml(title)}</strong>
+          <button id="distClose" class="btn btn-ghost">X</button>
+        </div>
+        <div class="modal-body">
+          <div class="muted" style="margin-bottom:10px">${escapeHtml(description)}</div>
+          <div id="distRows" style="display:flex;flex-direction:column;gap:8px"></div>
+        </div>
+        <div class="modal-actions">
+          <button id="distCancel" class="btn btn-ghost">Cancelar</button>
+          <button id="distSave" class="btn btn-primary">Confirmar distribuição</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const rowsEl = overlay.querySelector('#distRows');
+    const optionsHtml = executantes.map((item)=>`<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
+
+    procedimentosNorm.forEach((proc, index)=>{
+      const preset = initialMap[proc] || {};
+      const defaultExec = preset.execId || executantes[index % executantes.length].id;
+      const defaultValor = parseMoneyInput(preset.valor);
+      const row = document.createElement('div');
+      row.style.display = 'grid';
+      row.style.gridTemplateColumns = '1.6fr 1fr .8fr';
+      row.style.gap = '8px';
+      row.innerHTML = `
+        <div class="muted" style="border:1px solid var(--input-border);border-radius:10px;padding:10px">${escapeHtml(proc)}</div>
+        <select data-proc-index="${index}" class="dist-select">${optionsHtml}</select>
+        <input data-proc-index="${index}" class="dist-value" placeholder="Valor" inputmode="decimal" value="${defaultValor > 0 ? String(defaultValor).replace('.', ',') : ''}">
+      `;
+      rowsEl.appendChild(row);
+      const select = row.querySelector('select');
+      if (select) select.value = defaultExec;
+    });
+
+    function cleanup(result){
+      document.removeEventListener('keydown', onKeyDown);
+      const el = document.getElementById('distribuicaoOverlay');
+      if (el) el.remove();
+      resolve(result || null);
+    }
+
+    function onKeyDown(ev){
+      if (ev.key === 'Escape') cleanup(null);
+    }
+
+    overlay.querySelector('#distClose').onclick = ()=> cleanup(null);
+    overlay.querySelector('#distCancel').onclick = ()=> cleanup(null);
+    overlay.querySelector('#distSave').onclick = ()=>{
+      const selects = Array.from(overlay.querySelectorAll('.dist-select'));
+      const valueInputs = Array.from(overlay.querySelectorAll('.dist-value'));
+      const valuesByIndex = {};
+      valueInputs.forEach((input)=>{
+        const procIndex = parseInt(input.getAttribute('data-proc-index') || '-1', 10);
+        valuesByIndex[procIndex] = parseMoneyInput(input.value);
+      });
+      const grouped = {};
+      for (const select of selects) {
+        const execId = String(select.value || '').trim();
+        const procIndex = parseInt(select.getAttribute('data-proc-index') || '-1', 10);
+        const proc = String(procedimentosNorm[procIndex] || '').trim();
+        const valorProc = parseMoneyInput(valuesByIndex[procIndex]);
+        if (!execId || !proc) return showModalMessage('Preencha toda a distribuição de exames', 'error');
+        if (!(valorProc > 0)) return showModalMessage('Informe o valor de cada exame', 'error');
+        if (!grouped[execId]) grouped[execId] = [];
+        grouped[execId].push({ procedimento: proc, valor: valorProc });
+      }
+
+      const distribuicao = Object.keys(grouped).map((execId)=>({
+        executante: execId,
+        procedimentos: normalizeProcedimentos(grouped[execId].map((item)=> item.procedimento)),
+        itens: grouped[execId]
+      })).filter((item)=> item.procedimentos.length);
+
+      if (!distribuicao.length) return showModalMessage('Distribuição inválida', 'error');
+      if (distribuicao.length < minDistinctExecutantes) {
+        return showModalMessage(`Selecione pelo menos ${minDistinctExecutantes} fornecedores diferentes`, 'error');
+      }
+      cleanup(distribuicao);
+    };
+
+    overlay.addEventListener('click', (ev)=>{ if (ev.target === overlay) cleanup(null); });
+    document.addEventListener('keydown', onKeyDown);
+  });
+}
+
 async function showNewGuiaForm(){
   setActiveNav('btnNewGuia');
   const executantes = await fetchExecutantes();
@@ -703,7 +1053,7 @@ async function showNewGuiaForm(){
         <input id="cpf" placeholder="CPF" required>
   <!-- data de nascimento removida (não necessária no formulário) -->
         <input id="idPagamento" placeholder="ID de pagamento" required>
-        <input id="valor" placeholder="Valor (ex: 123.45)" required>
+        <input id="valor" placeholder="Valor total (opcional em múltiplos executantes)">
   <input type="date" id="dataPagamento" value="${new Date().toISOString().slice(0,10)}">
         <div style="display:flex;gap:8px;flex-direction:column">
           <label class="label">Procedimentos (selecione ou digite livre)</label>
@@ -722,7 +1072,17 @@ async function showNewGuiaForm(){
           </div>
         </div>
         <div style="margin-top:8px"><div class="label">Observações (opcional)</div><textarea id="observacoes" placeholder="Observações para o fornecedor ou interno"></textarea></div>
-        <select id="executante">${options}</select>
+        <div style="display:flex;gap:8px;flex-direction:column">
+          <label class="label">Executante(s)</label>
+          <div class="proc-input-row">
+            <select id="executante">${options}</select>
+            <button type="button" id="btn_add_exec" class="btn btn-ghost proc-add-btn" title="Adicionar executante">+</button>
+          </div>
+          <div>
+            <div class="label">Executantes selecionados</div>
+            <ul id="executantes_list" class="proc-added-list"><li class="muted">Nenhum executante selecionado</li></ul>
+          </div>
+        </div>
         <div>Parceria fixa: CARTÃO DE TODOS</div>
   <button type="submit" class="btn btn-primary btn-large">Gerar PDF</button>
       </form>
@@ -735,6 +1095,14 @@ async function showNewGuiaForm(){
   const procedimentosCatalog = Array.isArray(procedimentos) ? procedimentos.slice() : [];
   let selectedProcedure = null;
   let selectedProcedimentos = [];
+  let selectedExecutantes = [];
+
+  function syncPrimaryExecutante(){
+    const primaryExecId = String($('#executante').value || '').trim();
+    if (!primaryExecId) return;
+    if (!selectedExecutantes.includes(primaryExecId)) selectedExecutantes.unshift(primaryExecId);
+    selectedExecutantes = selectedExecutantes.filter((item, index, arr)=> item && arr.indexOf(item) === index);
+  }
 
   function renderSelectedProcedimentos(){
     const listEl = document.getElementById('procedimentos_list');
@@ -754,6 +1122,32 @@ async function showNewGuiaForm(){
     renderSelectedProcedimentos();
   }
 
+  function renderSelectedExecutantes(){
+    const listEl = document.getElementById('executantes_list');
+    if (!listEl) return;
+    if (!selectedExecutantes.length) {
+      listEl.innerHTML = '<li class="muted">Nenhum executante selecionado</li>';
+      return;
+    }
+
+    listEl.innerHTML = selectedExecutantes.map((execId)=>{
+      const execName = getExecutanteName(execId, executantes) || 'Executante';
+      return `<li style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span>${escapeHtml(execName)}</span><button type="button" class="btn btn-ghost btn-small btn-remove-exec" data-exec-id="${execId}">Remover</button></li>`;
+    }).join('');
+  }
+
+  function addExecutanteValue(execId){
+    const clean = String(execId || '').trim();
+    if (!clean) return;
+    if (selectedExecutantes.includes(clean)) return;
+    selectedExecutantes.push(clean);
+    renderSelectedExecutantes();
+  }
+
+  function addExecutanteFromSelect(){
+    addExecutanteValue($('#executante').value);
+  }
+
   function addFromSearch(){
     const value = selectedProcedure || $('#procedimento_search').value.trim();
     addProcedimentoValue(value);
@@ -770,6 +1164,21 @@ async function showNewGuiaForm(){
 
   document.getElementById('btn_add_proc_search').addEventListener('click', addFromSearch);
   document.getElementById('btn_add_proc_free').addEventListener('click', addFromFree);
+  document.getElementById('btn_add_exec').addEventListener('click', addExecutanteFromSelect);
+  document.getElementById('executante').addEventListener('change', ()=>{
+    syncPrimaryExecutante();
+    renderSelectedExecutantes();
+  });
+  document.getElementById('executantes_list').addEventListener('click', (ev)=>{
+    const btn = ev.target.closest('.btn-remove-exec');
+    if (!btn) return;
+    const execId = String(btn.getAttribute('data-exec-id') || '');
+    selectedExecutantes = selectedExecutantes.filter((item)=> String(item) !== execId);
+    syncPrimaryExecutante();
+    renderSelectedExecutantes();
+  });
+  syncPrimaryExecutante();
+  renderSelectedExecutantes();
 
   $('#procedimento_search').addEventListener('keydown', (ev)=>{
     if (ev.key === 'Enter') {
@@ -833,23 +1242,46 @@ async function showNewGuiaForm(){
         $('#procedimento_free').value.trim()
       ])
     );
+    syncPrimaryExecutante();
+    const execSelecionados = normalizeProcedimentos(selectedExecutantes);
+    if (!execSelecionados.length) return showModalMessage('Selecione ao menos um executante', 'error');
+
+    let distribuicaoExecutantes = [];
+    if (execSelecionados.length > 1) {
+      const distribuicao = await showProcedureDistributionModal(procedimentosFinal, execSelecionados, executantes, {
+        minDistinctExecutantes: Math.min(2, execSelecionados.length)
+      });
+      if (!distribuicao) return;
+      distribuicaoExecutantes = distribuicao;
+    } else {
+      distribuicaoExecutantes = [{ executante: execSelecionados[0], procedimentos: procedimentosFinal, itens: [] }];
+    }
+
+    const valorPorDistribuicao = distribuicaoExecutantes
+      .flatMap((item)=> Array.isArray(item && item.itens) ? item.itens : [])
+      .reduce((sum, item)=> sum + parseMoneyInput(item && item.valor), 0);
+    const valorManual = parseMoneyInput($('#valor').value.trim());
+    const valorFinal = valorPorDistribuicao > 0 ? valorPorDistribuicao : valorManual;
+
   const form = {
       pacienteNome: $('#pacienteNome').value.trim(),
       cpf: $('#cpf').value.replace(/\D/g,''),
       idPagamento: $('#idPagamento').value.trim(),
-  // aceitar formatos com pontos de milhar e vírgula decimal (ex: 1.234,56)
-  valor: (function(v){ try{ if (!v) return 0; const cleaned = v.replace(/\./g,'').replace(/,/g,'.'); const n = parseFloat(cleaned); return isNaN(n)?0:n; }catch(e){return 0;} })($('#valor').value.trim()),
+  valor: valorFinal,
   dataPagamento: $('#dataPagamento').value,
   procedimento: procedimentosFinal[0] || '',
   procedimentos: procedimentosFinal,
   observacoes: $('#observacoes').value.trim(),
-  executante: $('#executante').value
+  executante: execSelecionados[0],
+  executantes: execSelecionados,
+  distribuicaoExecutantes
     };
   // adicionar atendente vindo do usuário logado (frontend) para render do PDF
   form.atendenteNome = user ? user.name : '';
   form.atendentePerfil = user ? user.role : '';
     // validações
-  if (!form.pacienteNome || !form.cpf || !form.idPagamento || !form.valor || !form.procedimentos.length) return showModalMessage('Preencha todos os campos obrigatórios');
+  if (!form.pacienteNome || !form.cpf || !form.idPagamento || !form.procedimentos.length) return showModalMessage('Preencha todos os campos obrigatórios');
+  if (execSelecionados.length === 1 && !(Number(form.valor) > 0)) return showModalMessage('Informe o valor da guia');
   if (!validateCPF(form.cpf)) return showModalMessage('CPF inválido');
   if (new Date(form.dataPagamento) > new Date()) return showModalMessage('Data de pagamento não pode ser futura');
 
@@ -864,26 +1296,25 @@ async function showNewGuiaForm(){
       }
       // salvo com sucesso — agora gerar PDF
       try{
-        const jsPDFClass = await ensureJsPDF();
-        const doc = new jsPDFClass('p','mm','a4');
-        doc.setFont('helvetica'); doc.setFontSize(12);
-        const execs = await fetchExecutantes();
-        const exec = execs.find(e=>e._id===form.executante) || {};
-        await renderStandardGuidePDF(doc, form, exec);
-        const pdfBlob = doc.output('blob');
-        const url = URL.createObjectURL(pdfBlob);
-        const popup = window.open(url, '_blank');
-        if (!popup) {
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `guia-${(form.idPagamento || Date.now())}.pdf`;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        }
-        setTimeout(()=> URL.revokeObjectURL(url), 60_000);
+        const totalGerados = await generateGuidePdfsFromDistribution(
+          {
+            ...form,
+            ...data,
+            executante: data.executante || form.executante,
+            executantes: data.executantes || form.executantes,
+            distribuicaoExecutantes: data.distribuicaoExecutantes || form.distribuicaoExecutantes,
+            emitidoEm: data.emitidoEm,
+            atendenteNome: data.atendenteNome || form.atendenteNome,
+            valor: Number(data.valor || form.valor || 0)
+          },
+          {
+            isSecondCopy: false,
+            originalIssuedAt: data.emitidoEm,
+            reissuedAt: data.emitidoEm
+          }
+        );
+        showModalMessage(totalGerados > 1 ? `Guias geradas com sucesso (${totalGerados} PDFs)` : 'Guia gerada com sucesso');
       }catch(err){ showModalMessage('PDF gerado com erro: '+(err.message||err)); }
-      showModalMessage('Guia gerada com sucesso');
       // atualizar histórico para refletir novo registro
       try{ if (typeof showHistory === 'function') showHistory(); }catch(e){}
     }catch(err){ showModalMessage('Erro ao salvar guia: '+(err.message||err)); }
@@ -924,19 +1355,31 @@ async function showHistory(){
   function renderRows(items){
     if (!items || !items.length) return '<div>Nenhuma guia encontrada</div>';
     return items.map(g=>{
-      const execName = g.executante && g.executante.name ? g.executante.name : '-';
+      const distribuicao = normalizeGuiaDistribuicao(g);
+      const execNames = distribuicao
+        .map((item)=> getExecutanteName(item.executante, execs))
+        .filter((name, index, arr)=> name && arr.indexOf(name) === index);
+      const execName = execNames.length > 1 ? `${execNames.length} fornecedores • ${execNames.join(' | ')}` : (execNames[0] || '-');
+      const valoresPorFornecedor = distribuicao
+        .map((item)=> (Array.isArray(item.itens) ? item.itens : []).reduce((sum, entry)=> sum + parseMoneyInput(entry && entry.valor), 0))
+        .filter((valor)=> valor > 0);
+      const valoresResumo = valoresPorFornecedor.length
+        ? valoresPorFornecedor.map((valor)=> formatMoneyBR(valor)).join(' | ')
+        : formatMoneyBR(parseMoneyInput(g.valor || 0));
       const cpfFmt = formatCPF(g.cpf || '');
       return `
         <div class="glass" style="padding:12px;margin:8px 0;display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1">
             <div style="font-weight:700">${escapeHtml(g.pacienteNome)}</div>
             <div class="muted" style="font-size:13px">CPF: ${cpfFmt} • ID: ${escapeHtml(g.idPagamento)} • ${escapeHtml(getGuiaProcedimentosText(g))}</div>
-            <div class="muted" style="font-size:13px;margin-top:6px">Fornecedor: ${escapeHtml(execName)}</div>
+            <div class="muted" style="font-size:13px;margin-top:6px">Fornecedor(es): ${escapeHtml(execName)}</div>
+            <div class="muted" style="font-size:12px;margin-top:6px">Valores por fornecedor: ${escapeHtml(valoresResumo)}</div>
           </div>
           <div style="text-align:right;margin-left:12px">
             <div class="muted">Emitido: ${formatDateTime(g.emitidoEm)}</div>
-            <div style="font-weight:700;margin-top:8px">${formatMoneyBR(g.valor)}</div>
+            <div style="font-weight:700;margin-top:8px">${valoresPorFornecedor.length ? `${valoresPorFornecedor.length} valores` : formatMoneyBR(parseMoneyInput(g.valor || 0))}</div>
             <div class="muted" style="font-size:12px;margin-top:6px">Atendente: ${escapeHtml(g.atendenteNome||'')}</div>
+            <button data-action="segunda-via" data-id="${g._id}" class="btn btn-ghost btn-small btn-reissue" style="margin-top:8px">Gerar 2ª via</button>
           </div>
         </div>`;
     }).join('');
@@ -985,6 +1428,94 @@ async function showHistory(){
   document.getElementById('pageSizeSelect').addEventListener('change', (ev)=>{ pageSize = parseInt(ev.target.value,10)||100; currentPage = 1; updatePagination(); });
   document.getElementById('prevPage').addEventListener('click', ()=>{ if (currentPage>1){ currentPage--; updatePagination(); } });
   document.getElementById('nextPage').addEventListener('click', ()=>{ const totalPages = Math.max(1, Math.ceil(allItems.length / pageSize)); if (currentPage < totalPages){ currentPage++; updatePagination(); } });
+  document.getElementById('histList').addEventListener('click', async (ev)=>{
+    const btn = ev.target.closest('button[data-action="segunda-via"]');
+    if (!btn) return;
+    const id = btn.getAttribute('data-id');
+    const guiaListItem = allItems.find((item)=> String(item._id) === String(id));
+    if (!guiaListItem) return showModalMessage('Guia não encontrada no histórico', 'error');
+
+    btn.disabled = true;
+    try {
+      let guia = guiaListItem;
+      try {
+        guia = await fetchGuiaById(id);
+      } catch (fetchErr) {
+        console.warn('Falha ao buscar guia completa por ID; usando item do histórico.', fetchErr);
+      }
+
+      const distribuicaoAtual = normalizeGuiaDistribuicao(guia);
+      const procedimentosGuia = normalizeProcedimentos((guia && guia.procedimentos) || (guia && guia.procedimento));
+      const executantesIds = distribuicaoAtual.length
+        ? distribuicaoAtual.map((item)=> getExecutanteRefId(item.executante)).filter(Boolean)
+        : (Array.isArray(guia && guia.executantes) ? guia.executantes : [guia && guia.executante])
+          .map((item)=> getExecutanteRefId(item))
+          .filter((item, index, arr)=> item && arr.indexOf(item) === index);
+
+      const executantesParaModal = (procedimentosGuia.length > 1 && executantesIds.length < 2)
+        ? execs.map((item)=> String(item._id))
+        : executantesIds;
+
+      const minExecVia = procedimentosGuia.length > 1 ? 2 : 1;
+
+      if (executantesParaModal.length > 1 || procedimentosGuia.length > 1) {
+        const distribuicaoEditada = await showProcedureDistributionModal(
+          procedimentosGuia,
+          executantesParaModal,
+          execs,
+          {
+            initialDistribution: distribuicaoAtual,
+            title: 'Configurar 2ª via',
+            description: 'Confirme a distribuição de exames por executante e os valores antes de gerar a 2ª via.',
+            minDistinctExecutantes: Math.min(minExecVia, executantesParaModal.length)
+          }
+        );
+        if (!distribuicaoEditada) {
+          btn.disabled = false;
+          return;
+        }
+
+        const payloadUpdate = {
+          procedimentos: procedimentosGuia,
+          distribuicaoExecutantes: distribuicaoEditada
+        };
+
+        if (guia && guia._id) {
+          try {
+            const guiaAtualizada = await saveGuiaDistribution(guia._id, payloadUpdate);
+            guia = guiaAtualizada;
+          } catch (saveErr) {
+            showModalMessage('Não foi possível salvar a distribuição da 2ª via: ' + (saveErr.message || saveErr), 'error');
+            btn.disabled = false;
+            return;
+          }
+        } else {
+          guia = {
+            ...guia,
+            executantes: executantesParaModal,
+            distribuicaoExecutantes: distribuicaoEditada
+          };
+        }
+      }
+
+      const totalGerados = await generateGuidePdfsFromDistribution(
+        {
+          ...guia,
+          atendenteNome: guia.atendenteNome || (guia.atendente && guia.atendente.name) || ''
+        },
+        {
+          isSecondCopy: true,
+          originalIssuedAt: guia.emitidoEm,
+          reissuedAt: new Date()
+        }
+      );
+      showModalMessage(totalGerados > 1 ? `2ª via gerada (${totalGerados} PDFs)` : '2ª via gerada com sucesso', 'success');
+    } catch (err) {
+      showModalMessage('Erro ao gerar 2ª via: ' + (err.message || err), 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
   // carregar inicialmente
   loadHistory();
 }
