@@ -1041,7 +1041,9 @@ function showProcedureDistributionModal(procedimentos, executanteIds, executante
 async function showNewGuiaForm(){
   setActiveNav('btnNewGuia');
   const executantes = await fetchExecutantes();
-  const options = executantes.map(e=>`<option value="${e._id}">${e.name}</option>`).join('');
+  const options = ['<option value="">Selecione um executante</option>']
+    .concat(executantes.map(e=>`<option value="${e._id}">${e.name}</option>`))
+    .join('');
   // carregar procedimentos pre-cadastrados
   const procsRes = await fetch('/api/procedimentos', { headers:{ Authorization: 'Bearer '+token } });
   const procedimentos = procsRes.ok? await procsRes.json() : [];
@@ -1097,13 +1099,6 @@ async function showNewGuiaForm(){
   let selectedProcedimentos = [];
   let selectedExecutantes = [];
 
-  function syncPrimaryExecutante(){
-    const primaryExecId = String($('#executante').value || '').trim();
-    if (!primaryExecId) return;
-    if (!selectedExecutantes.includes(primaryExecId)) selectedExecutantes.unshift(primaryExecId);
-    selectedExecutantes = selectedExecutantes.filter((item, index, arr)=> item && arr.indexOf(item) === index);
-  }
-
   function renderSelectedProcedimentos(){
     const listEl = document.getElementById('procedimentos_list');
     if (!listEl) return;
@@ -1145,7 +1140,9 @@ async function showNewGuiaForm(){
   }
 
   function addExecutanteFromSelect(){
-    addExecutanteValue($('#executante').value);
+    const selected = String($('#executante').value || '').trim();
+    if (!selected) return showModalMessage('Selecione um executante para adicionar', 'error');
+    addExecutanteValue(selected);
   }
 
   function addFromSearch(){
@@ -1165,19 +1162,13 @@ async function showNewGuiaForm(){
   document.getElementById('btn_add_proc_search').addEventListener('click', addFromSearch);
   document.getElementById('btn_add_proc_free').addEventListener('click', addFromFree);
   document.getElementById('btn_add_exec').addEventListener('click', addExecutanteFromSelect);
-  document.getElementById('executante').addEventListener('change', ()=>{
-    syncPrimaryExecutante();
-    renderSelectedExecutantes();
-  });
   document.getElementById('executantes_list').addEventListener('click', (ev)=>{
     const btn = ev.target.closest('.btn-remove-exec');
     if (!btn) return;
     const execId = String(btn.getAttribute('data-exec-id') || '');
     selectedExecutantes = selectedExecutantes.filter((item)=> String(item) !== execId);
-    syncPrimaryExecutante();
     renderSelectedExecutantes();
   });
-  syncPrimaryExecutante();
   renderSelectedExecutantes();
 
   $('#procedimento_search').addEventListener('keydown', (ev)=>{
@@ -1242,7 +1233,6 @@ async function showNewGuiaForm(){
         $('#procedimento_free').value.trim()
       ])
     );
-    syncPrimaryExecutante();
     const execSelecionados = normalizeProcedimentos(selectedExecutantes);
     if (!execSelecionados.length) return showModalMessage('Selecione ao menos um executante', 'error');
 
