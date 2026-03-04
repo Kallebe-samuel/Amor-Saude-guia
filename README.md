@@ -95,3 +95,13 @@ Limitações e próximos passos
 ### 4) CORS e integração
 - O backend já permite CORS e o frontend agora suporta `API_BASE_URL` para chamadas `/api`.
 - Socket.IO também passa a conectar no backend remoto automaticamente quando `API_BASE_URL` está definido.
+
+### 5) Keep-alive automático (Render Free)
+- O backend expõe `GET /health` e pode fazer auto-ping configurável para reduzir risco de sleep por inatividade.
+- Defina no Render:
+	- `SELF_PING_ENABLED=true`
+	- `SELF_PING_URL=https://SEU-SERVICO.onrender.com`
+	- `SELF_PING_INTERVAL_MINUTES=13`
+	- `SELF_PING_PATH=/health`
+	- `SELF_PING_TIMEOUT_MS=8000`
+- Observação: por ser plano gratuito, este comportamento pode variar conforme políticas da plataforma.
